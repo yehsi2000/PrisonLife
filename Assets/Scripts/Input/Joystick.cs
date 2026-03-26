@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
 
-namespace ArcadeIdle.Input
+namespace PrisonLife.Input
 {
     /// <summary>
     /// Base class for UI-based virtual joysticks.

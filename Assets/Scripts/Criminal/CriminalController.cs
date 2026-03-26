@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace ArcadeIdle.Core
+namespace PrisonLife.Core
 {
     /// <summary>
     /// Per-criminal MonoBehaviour that lives on each criminal GameObject.

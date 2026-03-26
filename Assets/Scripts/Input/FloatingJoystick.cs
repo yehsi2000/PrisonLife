@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
 
-namespace ArcadeIdle.Input
+namespace PrisonLife.Input
 {
     /// <summary>
     /// A floating joystick that appears at the player's touch position and

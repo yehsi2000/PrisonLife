@@ -1,8 +1,8 @@
 using UnityEngine;
-using ArcadeIdle.Input;
-using ArcadeIdle.Core;
+using PrisonLife.Input;
+using PrisonLife.Core;
 
-namespace ArcadeIdle.Player
+namespace PrisonLife.Player
 {
     /// <summary>
     /// Central MonoBehaviour that lives on the Player GameObject.

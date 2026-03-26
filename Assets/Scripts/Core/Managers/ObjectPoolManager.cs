@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace ArcadeIdle.Core
+namespace PrisonLife.Core
 {
     /// <summary>
     /// Centralized object-pool manager for the Arcade Idle game.
