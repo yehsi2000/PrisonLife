@@ -1,7 +1,7 @@
-using ArcadeIdle.Player;
+using PrisonLife.Player;
 using UnityEngine;
 
-namespace ArcadeIdle.Core.Interfaces
+namespace PrisonLife.Core.Interfaces
 {
     /// <summary>
     /// Contract for any object the player can stand near to trigger a repeated interaction.

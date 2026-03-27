@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace ArcadeIdle.Core
+namespace PrisonLife.Core
 {
     #region Game State Enum
 

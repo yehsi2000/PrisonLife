@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace ArcadeIdle.Core
+namespace PrisonLife.Core
 {
     /// <summary>
     /// Manages an infinite queue of criminals waiting at a desk.

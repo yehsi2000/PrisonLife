@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace ArcadeIdle.Items.Visual
+namespace PrisonLife.Items.Visual
 {
     /// <summary>
     /// Base visual component for items that animate along a bezier arc from a

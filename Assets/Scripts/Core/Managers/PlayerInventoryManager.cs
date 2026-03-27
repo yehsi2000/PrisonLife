@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace ArcadeIdle.Core
+namespace PrisonLife.Core
 {
     /// <summary>
     /// Manages the player's carried‑item stack.
