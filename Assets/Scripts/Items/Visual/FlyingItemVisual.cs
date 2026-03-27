@@ -87,12 +87,12 @@ namespace PrisonLife.Items.Visual
         /// </param>
         public void Initialize(Vector3 startPos, Transform target, float duration = -1f)
         {
-            // TODO: Store startPos in _startPosition.
-            // TODO: Store target in _targetTransform.
-            // TODO: If duration > 0 override _flightDuration, otherwise keep serialized value.
-            // TODO: Reset _elapsedTime to 0.
-            // TODO: Set _isFlying to true.
-            // TODO: Snap transform.position to startPos so the first frame is correct.
+            _startPosition = startPos;
+            _targetTransform = target;
+            if (duration > 0f) _flightDuration = duration;
+            _elapsedTime = 0f;
+            _isFlying = true;
+            transform.position = startPos;
         }
 
         /// <summary>
@@ -102,8 +102,8 @@ namespace PrisonLife.Items.Visual
         /// </summary>
         public void Cancel()
         {
-            // TODO: Guard — early-out if not currently flying.
-            // TODO: Call ResetState() to clear runtime fields.
+            if (!_isFlying) return;
+            ResetState();
         }
 
         #endregion
@@ -115,31 +115,31 @@ namespace PrisonLife.Items.Visual
         /// </summary>
         protected virtual void Update()
         {
-            // if (!_isFlying) return;
-            //
-            // // 1. Accumulate elapsed time.
-            // _elapsedTime += Time.deltaTime;
-            //
-            // // 2. Calculate normalised progress t ∈ [0, 1].
-            // float t = Mathf.Clamp01(_elapsedTime / _flightDuration);
-            //
-            // // 3. Sample the current target position (supports moving targets).
-            // Vector3 targetPos = _targetTransform != null ? _targetTransform.position : transform.position;
-            //
-            // // 4. Evaluate the bezier/arc position for the current t.
-            // transform.position = EvaluateArcPosition(_startPosition, targetPos, t);
-            //
-            // // 5. Optionally rotate the item while in flight.
-            // if (_rotateWhileFlying)
-            // {
-            //     transform.Rotate(Vector3.up, _rotationSpeed * Time.deltaTime, Space.World);
-            // }
-            //
-            // // 6. Check if the flight is complete (t >= 1).
-            // if (t >= 1f)
-            // {
-            //     OnArrived();
-            // }
+            if (!_isFlying) return;
+
+            // 1. Accumulate elapsed time.
+            _elapsedTime += Time.deltaTime;
+
+            // 2. Calculate normalised progress t ∈ [0, 1].
+            float t = Mathf.Clamp01(_elapsedTime / _flightDuration);
+
+            // 3. Sample the current target position (supports moving targets).
+            Vector3 targetPos = _targetTransform != null ? _targetTransform.position : transform.position;
+
+            // 4. Evaluate the bezier/arc position for the current t.
+            transform.position = EvaluateArcPosition(_startPosition, targetPos, t);
+
+            // 5. Optionally rotate the item while in flight.
+            if (_rotateWhileFlying)
+            {
+                transform.Rotate(Vector3.up, _rotationSpeed * Time.deltaTime, Space.World);
+            }
+
+            // 6. Check if the flight is complete (t >= 1).
+            if (t >= 1f)
+            {
+                OnArrived();
+            }
         }
 
         #endregion
@@ -157,25 +157,13 @@ namespace PrisonLife.Items.Visual
         /// <returns>The interpolated position on the arc.</returns>
         protected virtual Vector3 EvaluateArcPosition(Vector3 start, Vector3 end, float t)
         {
-            // TODO: Implement a quadratic bezier curve evaluation.
-            //
-            // Math overview:
-            //   1. Compute the midpoint between start and end:
-            //        midpoint = (start + end) / 2
-            //
-            //   2. Build a control point by raising the midpoint on the Y axis
-            //      by _arcHeight:
-            //        controlPoint = midpoint + Vector3.up * _arcHeight
-            //
-            //   3. Evaluate the quadratic bezier formula:
-            //        B(t) = (1-t)^2 * start
-            //             + 2 * (1-t) * t * controlPoint
-            //             + t^2 * end
-            //
-            //   This produces a smooth parabolic arc that peaks at _arcHeight
-            //   above the midpoint of the straight-line path.
+            Vector3 midpoint = (start + end) / 2f;
+            Vector3 controlPoint = midpoint + Vector3.up * _arcHeight;
 
-            return Vector3.zero; // Placeholder — replace with bezier evaluation.
+            float u = 1f - t;
+            return u * u * start
+                 + 2f * u * t * controlPoint
+                 + t * t * end;
         }
 
         /// <summary>
@@ -189,9 +177,10 @@ namespace PrisonLife.Items.Visual
         /// </summary>
         protected virtual void OnArrived()
         {
-            // TODO: Snap transform.position to _targetTransform.position (if target still exists).
-            // TODO: Invoke OnFlightComplete, passing 'this'.
-            // TODO: Call ResetState().
+            if (_targetTransform != null)
+                transform.position = _targetTransform.position;
+            OnFlightComplete?.Invoke(this);
+            ResetState();
         }
 
         /// <summary>
@@ -200,10 +189,10 @@ namespace PrisonLife.Items.Visual
         /// </summary>
         protected virtual void ResetState()
         {
-            // TODO: Set _isFlying to false.
-            // TODO: Reset _elapsedTime to 0.
-            // TODO: Set _startPosition to Vector3.zero.
-            // TODO: Set _targetTransform to null.
+            _isFlying = false;
+            _elapsedTime = 0f;
+            _startPosition = Vector3.zero;
+            _targetTransform = null;
         }
 
         #endregion

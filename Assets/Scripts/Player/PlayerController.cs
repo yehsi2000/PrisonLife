@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.AI;
 using PrisonLife.Input;
 using PrisonLife.Core;
 
@@ -6,15 +7,15 @@ namespace PrisonLife.Player
 {
     /// <summary>
     /// Central MonoBehaviour that lives on the Player GameObject.
-    /// Drives CharacterController-based movement from a UI FloatingJoystick,
-    /// rotates the character to face the movement direction, applies gravity,
-    /// and exposes sub-component references (inventory, etc.).
+    /// Drives <see cref="NavMeshAgent"/>-based movement from a UI FloatingJoystick,
+    /// constraining the player to the baked NavMesh surface while retaining
+    /// full manual control over speed and rotation.
     /// <para>
     /// Required components on the same GameObject:
-    /// <see cref="CharacterController"/>, <see cref="PlayerInventoryManager"/>.
+    /// <see cref="NavMeshAgent"/>, <see cref="PlayerInventoryManager"/>.
     /// </para>
     /// </summary>
-    [RequireComponent(typeof(CharacterController))]
+    [RequireComponent(typeof(NavMeshAgent))]
     public class PlayerController : MonoBehaviour
     {
         #region Serialized Fields
@@ -27,13 +28,6 @@ namespace PrisonLife.Player
         [Tooltip("Maximum movement speed in units per second.")]
         [SerializeField] private float _moveSpeed = 5f;
 
-        [Tooltip("Gravity applied to the character every frame (positive value, applied downward).")]
-        [SerializeField] private float _gravity = 20f;
-
-        [Header("Rotation")]
-        [Tooltip("How fast the character rotates toward the movement direction (degrees per second via Slerp smoothing factor).")]
-        [SerializeField] private float _rotationSpeed = 10f;
-
         [Header("Component References")]
         [Tooltip("Reference to the PlayerInventoryManager on this GameObject.")]
         [SerializeField] private PlayerInventoryManager _inventory;
@@ -42,11 +36,8 @@ namespace PrisonLife.Player
 
         #region Private Fields
 
-        /// <summary>Cached CharacterController component.</summary>
-        private CharacterController _characterController;
-
-        /// <summary>Current vertical velocity (used for gravity accumulation).</summary>
-        private float _verticalVelocity;
+        /// <summary>Cached NavMeshAgent component.</summary>
+        private NavMeshAgent _agent;
 
         /// <summary>When false, input is ignored and the character stands still.</summary>
         private bool _canMove = true;
@@ -61,8 +52,8 @@ namespace PrisonLife.Player
         /// <summary><c>true</c> when the player is actively moving via joystick input.</summary>
         public bool IsMoving { get; private set; }
 
-        /// <summary>The cached <see cref="CharacterController"/> on this GameObject.</summary>
-        public CharacterController CharacterController => _characterController;
+        /// <summary>The cached <see cref="NavMeshAgent"/> on this GameObject.</summary>
+        public NavMeshAgent Agent => _agent;
 
         #endregion
 
@@ -70,8 +61,14 @@ namespace PrisonLife.Player
 
         private void Awake()
         {
-            // Cache the required CharacterController
-            _characterController = GetComponent<CharacterController>();
+            // Cache the required NavMeshAgent
+            _agent = GetComponent<NavMeshAgent>();
+
+            // Disable automatic pathfinding — we drive movement manually via Move().
+            // The agent still constrains the resulting position to the NavMesh surface.
+            _agent.updateRotation = false;  // we handle rotation ourselves
+            _agent.updateUpAxis   = false;  // keep agent flat on the surface
+            _agent.speed          = 0f;     // no automatic movement; we call Move() directly
 
             // Validate critical references
             if (_joystick == null)
@@ -96,25 +93,24 @@ namespace PrisonLife.Player
 
         /// <summary>
         /// Core movement method called every frame.
-        /// Reads joystick input, builds a world-space movement vector,
-        /// applies gravity, moves via CharacterController, and rotates
-        /// the character to face the movement direction.
+        /// Reads joystick input, builds a world-space displacement vector,
+        /// passes it to <see cref="NavMeshAgent.Move"/> (which constrains it
+        /// to the NavMesh), and rotates the character to face the direction.
         /// </summary>
         private void HandleMovement()
         {
             // --- Early exit if movement is disabled ---
             if (!_canMove || _joystick == null)
             {
-                ApplyGravity();
                 IsMoving = false;
                 return;
             }
 
             // --- Read joystick input ---
             // Joystick.Horizontal maps to X (left/right)
-            // Joystick.Vertical maps to Z (forward/back) in a top-down view
+            // Joystick.Vertical   maps to Z (forward/back) in a top-down view
             float horizontal = _joystick.Horizontal;
-            float vertical = _joystick.Vertical;
+            float vertical   = _joystick.Vertical;
 
             // Build the movement direction on the XZ plane
             Vector3 moveDirection = new Vector3(horizontal, 0f, vertical);
@@ -124,75 +120,32 @@ namespace PrisonLife.Player
             bool hasInput = moveDirection.sqrMagnitude > 0.01f;
             IsMoving = hasInput;
 
-            // --- Calculate horizontal displacement ---
-            Vector3 displacement = Vector3.zero;
-
             if (hasInput)
             {
                 // Normalize to prevent diagonal speed boost, then scale by speed.
                 // Multiply by the raw magnitude (clamped to 1 by the joystick) so that
                 // partial tilts produce proportionally slower movement.
-                float inputMagnitude = Mathf.Clamp01(moveDirection.magnitude);
+                float inputMagnitude     = Mathf.Clamp01(moveDirection.magnitude);
                 Vector3 normalizedDirection = moveDirection.normalized;
 
-                displacement = normalizedDirection * (_moveSpeed * inputMagnitude * Time.deltaTime);
+                // NavMeshAgent.Move() accepts a displacement vector (same API as
+                // CharacterController.Move) but automatically clamps the result to
+                // the baked NavMesh — the player cannot walk off walkable surfaces.
+                Vector3 displacement = normalizedDirection * (_moveSpeed * inputMagnitude * Time.deltaTime);
+                _agent.Move(displacement);
 
                 // --- Rotate toward movement direction ---
                 HandleRotation(normalizedDirection);
             }
-
-            // --- Apply gravity ---
-            if (_characterController.isGrounded)
-            {
-                // Small downward force to keep the controller "stuck" to the ground
-                _verticalVelocity = -0.5f;
-            }
-            else
-            {
-                _verticalVelocity -= _gravity * Time.deltaTime;
-            }
-
-            displacement.y = _verticalVelocity * Time.deltaTime;
-
-            // --- Move the CharacterController ---
-            _characterController.Move(displacement);
         }
 
         /// <summary>
-        /// Smoothly rotates the character to face the given world-space direction
-        /// using <see cref="Quaternion.Slerp"/> for a polished, non-snappy feel.
+        /// Instantly rotates the character to face the given world-space direction.
         /// </summary>
         /// <param name="direction">Normalized XZ movement direction to face.</param>
         private void HandleRotation(Vector3 direction)
         {
-            // Build the target rotation from the direction vector
-            Quaternion targetRotation = Quaternion.LookRotation(direction, Vector3.up);
-
-            // Smoothly interpolate from current rotation toward the target
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation,
-                targetRotation,
-                _rotationSpeed * Time.deltaTime);
-        }
-
-        /// <summary>
-        /// Applies gravity when movement is disabled (so the character doesn't float).
-        /// Called from <see cref="HandleMovement"/> on early-exit paths.
-        /// </summary>
-        private void ApplyGravity()
-        {
-            if (_characterController == null) return;
-
-            if (_characterController.isGrounded)
-            {
-                _verticalVelocity = -0.5f;
-            }
-            else
-            {
-                _verticalVelocity -= _gravity * Time.deltaTime;
-            }
-
-            _characterController.Move(new Vector3(0f, _verticalVelocity * Time.deltaTime, 0f));
+            transform.rotation = Quaternion.LookRotation(direction, Vector3.up);
         }
 
         #endregion
@@ -206,9 +159,8 @@ namespace PrisonLife.Player
         /// </summary>
         public void StopMovement()
         {
-            _canMove = false;
-            IsMoving = false;
-            _verticalVelocity = 0f;
+            _canMove  = false;
+            IsMoving  = false;
         }
 
         /// <summary>
@@ -244,13 +196,10 @@ namespace PrisonLife.Player
 #if UNITY_EDITOR
         /// <summary>
         /// Called in the Editor when the script is loaded or a value changes in the Inspector.
-        /// Validates that a CharacterController exists on this GameObject.
         /// </summary>
         private void OnValidate()
         {
             if (_moveSpeed < 0f) _moveSpeed = 0f;
-            if (_gravity < 0f) _gravity = 0f;
-            if (_rotationSpeed < 0f) _rotationSpeed = 0f;
         }
 #endif
 

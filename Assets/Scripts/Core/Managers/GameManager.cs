@@ -157,9 +157,6 @@ namespace PrisonLife.Core
             }
 
             _instance = this;
-            DontDestroyOnLoad(gameObject);
-
-            // TODO: Run any pre-initialization (analytics SDK, remote config fetch, etc.).
         }
 
         /// <summary>

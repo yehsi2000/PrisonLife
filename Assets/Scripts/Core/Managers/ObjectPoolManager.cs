@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Pool;
 
 namespace PrisonLife.Core
 {
@@ -8,6 +9,7 @@ namespace PrisonLife.Core
     /// Centralized object-pool manager for the Arcade Idle game.
     /// Provides spawn/despawn API for pooled prefabs such as flying-rock visuals,
     /// flying-handcuff visuals, criminal NPCs, and VFX.
+    /// Backed by <see cref="UnityEngine.Pool.ObjectPool{T}"/> (Unity 2021+).
     /// </summary>
     public class ObjectPoolManager : MonoBehaviour
     {
@@ -36,6 +38,9 @@ namespace PrisonLife.Core
             [Tooltip("Number of instances to pre-instantiate on Awake.")]
             public int initialSize = 10;
 
+            [Tooltip("Maximum number of inactive objects kept in the pool. -1 = unlimited.")]
+            public int maxSize = 100;
+
             [Tooltip("If true, the pool will instantiate new objects when exhausted instead of returning null.")]
             public bool expandable = true;
         }
@@ -52,6 +57,14 @@ namespace PrisonLife.Core
             public const string VFX_MinePoof   = "VFX_MinePoof";
         }
 
+        /// <summary>Internal wrapper that pairs a Unity ObjectPool with its metadata.</summary>
+        private class PoolEntry
+        {
+            public PoolDefinition Definition;
+            public ObjectPool<GameObject> Pool;
+            public Transform Parent;
+        }
+
         #endregion
 
         #region Serialized Fields
@@ -64,11 +77,8 @@ namespace PrisonLife.Core
 
         #region Private Fields
 
-        /// <summary>Actual pool storage — maps tag to a queue of inactive GameObjects.</summary>
-        private Dictionary<string, Queue<GameObject>> _pools;
-
-        /// <summary>Parent transform per pool to keep the Hierarchy window tidy.</summary>
-        private Dictionary<string, Transform> _poolParents;
+        /// <summary>Maps tag → PoolEntry (Unity ObjectPool + metadata).</summary>
+        private Dictionary<string, PoolEntry> _entries;
 
         #endregion
 
@@ -84,7 +94,6 @@ namespace PrisonLife.Core
             }
 
             Instance = this;
-            DontDestroyOnLoad(gameObject);
 
             InitializePools();
         }
@@ -94,21 +103,68 @@ namespace PrisonLife.Core
         #region Initialization
 
         /// <summary>
-        /// Pre-instantiates every pool declared in <see cref="_poolDefinitions"/>.
-        /// Called once from <see cref="Awake"/>.
-        /// Creates a child Transform per pool for hierarchy organisation, then
-        /// instantiates <see cref="PoolDefinition.initialSize"/> copies of each prefab.
+        /// Builds one <see cref="ObjectPool{T}"/> per <see cref="PoolDefinition"/> and
+        /// pre-warms each pool to <see cref="PoolDefinition.initialSize"/>.
         /// </summary>
         private void InitializePools()
         {
-            // TODO: Allocate _pools and _poolParents dictionaries.
-            // TODO: Iterate _poolDefinitions.
-            //       For each definition:
-            //         1. Create a child GameObject named "Pool_<tag>" under this transform.
-            //         2. Store its Transform in _poolParents.
-            //         3. Create a new Queue<GameObject> in _pools.
-            //         4. Call CreatePoolObject(tag) x initialSize times, enqueue results.
-            throw new System.NotImplementedException();
+            _entries = new Dictionary<string, PoolEntry>();
+
+            foreach (PoolDefinition def in _poolDefinitions)
+            {
+                if (string.IsNullOrEmpty(def.tag) || def.prefab == null)
+                {
+                    Debug.LogWarning($"[ObjectPoolManager] Skipping invalid pool definition (tag='{def.tag}').");
+                    continue;
+                }
+
+                // Hierarchy container.
+                GameObject parentGO = new GameObject($"Pool_{def.tag}");
+                parentGO.transform.SetParent(transform);
+                Transform parent = parentGO.transform;
+
+                // Capture locals for the lambdas below.
+                PoolDefinition capturedDef = def;
+                Transform      capturedParent = parent;
+
+                int maxSize = def.maxSize > 0 ? def.maxSize : int.MaxValue;
+
+                ObjectPool<GameObject> pool = new ObjectPool<GameObject>(
+                    createFunc:      () =>
+                    {
+                        GameObject go = Instantiate(capturedDef.prefab, capturedParent);
+                        go.SetActive(false);
+                        return go;
+                    },
+                    actionOnGet:     go =>
+                    {
+                        go.SetActive(true);
+                    },
+                    actionOnRelease: go =>
+                    {
+                        go.SetActive(false);
+                        go.transform.SetParent(capturedParent);
+                    },
+                    actionOnDestroy: go => Destroy(go),
+                    collectionCheck: false,
+                    defaultCapacity: def.initialSize,
+                    maxSize:         maxSize
+                );
+
+                _entries[def.tag] = new PoolEntry
+                {
+                    Definition = def,
+                    Pool       = pool,
+                    Parent     = parent,
+                };
+
+                // Pre-warm: get then release so objects are created and returned to the pool.
+                var prewarm = new List<GameObject>(def.initialSize);
+                for (int i = 0; i < def.initialSize; i++)
+                    prewarm.Add(pool.Get());
+                foreach (var go in prewarm)
+                    pool.Release(go);
+            }
         }
 
         #endregion
@@ -128,22 +184,32 @@ namespace PrisonLife.Core
         /// is exhausted and not expandable.</returns>
         public GameObject Spawn(string tag, Vector3 position, Quaternion rotation)
         {
-            // TODO: Validate tag exists in _pools.
-            // TODO: Dequeue from _pools[tag] (or expand if empty & expandable).
-            // TODO: Set position, rotation, SetActive(true), unparent if desired.
-            // TODO: Return the object.
-            throw new System.NotImplementedException();
+            if (!_entries.TryGetValue(tag, out PoolEntry entry))
+            {
+                Debug.LogError($"[ObjectPoolManager] Spawn: unknown pool tag '{tag}'.");
+                return null;
+            }
+
+            // Unity's ObjectPool always creates a new object when exhausted (no hard cap
+            // unless maxSize is set). We honour the expandable flag by checking count.
+            if (!entry.Definition.expandable && entry.Pool.CountInactive == 0)
+            {
+                Debug.LogWarning($"[ObjectPoolManager] Pool '{tag}' is exhausted and not expandable.");
+                return null;
+            }
+
+            GameObject obj = entry.Pool.Get();
+            obj.transform.SetParent(null);
+            obj.transform.SetPositionAndRotation(position, rotation);
+            return obj;
         }
 
         /// <summary>
         /// Convenience overload — spawns the object at world origin with identity rotation.
         /// </summary>
-        /// <param name="tag">Pool tag (use <see cref="PoolTags"/> constants).</param>
-        /// <returns>The activated <see cref="GameObject"/>, or <c>null</c>.</returns>
         public GameObject Spawn(string tag)
         {
-            // TODO: Delegate to Spawn(tag, Vector3.zero, Quaternion.identity).
-            throw new System.NotImplementedException();
+            return Spawn(tag, Vector3.zero, Quaternion.identity);
         }
 
         #endregion
@@ -154,38 +220,39 @@ namespace PrisonLife.Core
         /// Deactivates <paramref name="obj"/> and returns it to the pool identified by
         /// <paramref name="tag"/>. Re-parents the object under the pool's parent transform.
         /// </summary>
-        /// <param name="tag">Pool tag the object belongs to.</param>
-        /// <param name="obj">The <see cref="GameObject"/> to return.</param>
         public void Despawn(string tag, GameObject obj)
         {
-            // TODO: Validate tag and obj.
-            // TODO: SetActive(false), re-parent under _poolParents[tag].
-            // TODO: Enqueue back into _pools[tag].
-            throw new System.NotImplementedException();
+            if (!_entries.TryGetValue(tag, out PoolEntry entry))
+            {
+                Debug.LogError($"[ObjectPoolManager] Despawn: unknown pool tag '{tag}'.");
+                return;
+            }
+
+            if (obj == null)
+            {
+                Debug.LogWarning($"[ObjectPoolManager] Despawn: null object passed for pool '{tag}'.");
+                return;
+            }
+
+            entry.Pool.Release(obj);
         }
 
         /// <summary>
         /// Deactivates and returns <paramref name="obj"/> to the pool after
-        /// <paramref name="delay"/> seconds. Internally starts a coroutine.
+        /// <paramref name="delay"/> seconds.
         /// </summary>
-        /// <param name="tag">Pool tag the object belongs to.</param>
-        /// <param name="obj">The <see cref="GameObject"/> to return.</param>
-        /// <param name="delay">Seconds to wait before despawning.</param>
         public void Despawn(string tag, GameObject obj, float delay)
         {
-            // TODO: Start coroutine DespawnAfterDelay(tag, obj, delay).
-            throw new System.NotImplementedException();
+            StartCoroutine(DespawnAfterDelay(tag, obj, delay));
         }
 
         /// <summary>
-        /// Coroutine that waits for <paramref name="delay"/> seconds, then calls
-        /// <see cref="Despawn(string, GameObject)"/>.
+        /// Coroutine that waits <paramref name="delay"/> seconds then despawns.
         /// </summary>
         private IEnumerator DespawnAfterDelay(string tag, GameObject obj, float delay)
         {
-            // TODO: yield return new WaitForSeconds(delay);
-            // TODO: Call Despawn(tag, obj).
-            throw new System.NotImplementedException();
+            yield return new WaitForSeconds(delay);
+            Despawn(tag, obj);
         }
 
         #endregion
@@ -193,75 +260,51 @@ namespace PrisonLife.Core
         #region Public API — Pool Management
 
         /// <summary>
-        /// Adds <paramref name="additionalCount"/> new instances to the pool identified
-        /// by <paramref name="tag"/>. Useful for pre-loading before a wave or level.
+        /// Adds <paramref name="additionalCount"/> new inactive instances to the pool.
         /// </summary>
-        /// <param name="tag">Pool tag to expand.</param>
-        /// <param name="additionalCount">Number of new instances to create.</param>
         public void ExpandPool(string tag, int additionalCount)
         {
-            // TODO: Validate tag.
-            // TODO: Call CreatePoolObject(tag) x additionalCount, enqueue each.
-            throw new System.NotImplementedException();
+            if (!_entries.TryGetValue(tag, out PoolEntry entry))
+            {
+                Debug.LogError($"[ObjectPoolManager] ExpandPool: unknown pool tag '{tag}'.");
+                return;
+            }
+
+            var temp = new List<GameObject>(additionalCount);
+            for (int i = 0; i < additionalCount; i++)
+                temp.Add(entry.Pool.Get());
+            foreach (var go in temp)
+                entry.Pool.Release(go);
         }
 
         /// <summary>
-        /// Returns <c>true</c> if the pool identified by <paramref name="tag"/>
-        /// currently has at least one inactive object ready for use.
+        /// Returns <c>true</c> if the pool has at least one inactive object ready.
         /// </summary>
-        /// <param name="tag">Pool tag to check.</param>
-        /// <returns><c>true</c> if an object is available without expansion.</returns>
         public bool HasAvailable(string tag)
         {
-            // TODO: Return _pools.ContainsKey(tag) && _pools[tag].Count > 0.
-            throw new System.NotImplementedException();
+            return _entries.TryGetValue(tag, out PoolEntry entry) && entry.Pool.CountInactive > 0;
         }
 
         /// <summary>
-        /// Returns the total number of objects (both active and inactive) that have
-        /// been created for the pool identified by <paramref name="tag"/>.
+        /// Returns the total number of objects (active + inactive) created for this pool.
         /// </summary>
-        /// <param name="tag">Pool tag to query.</param>
-        /// <returns>Total instantiated object count for this pool.</returns>
         public int GetPoolCount(string tag)
         {
-            // TODO: Count all children under _poolParents[tag] (active + inactive).
-            throw new System.NotImplementedException();
+            if (!_entries.TryGetValue(tag, out PoolEntry entry))
+            {
+                Debug.LogWarning($"[ObjectPoolManager] GetPoolCount: unknown pool tag '{tag}'.");
+                return 0;
+            }
+
+            return entry.Pool.CountAll;
         }
 
         /// <summary>
-        /// Pre-warms the pool identified by <paramref name="tag"/> with
-        /// <paramref name="count"/> additional inactive instances.
-        /// Functionally equivalent to <see cref="ExpandPool"/> but semantically
-        /// intended for pre-loading during loading screens or quiet moments.
+        /// Pre-warms the pool with <paramref name="count"/> additional inactive instances.
         /// </summary>
-        /// <param name="tag">Pool tag to warm up.</param>
-        /// <param name="count">Number of additional instances to create.</param>
         public void WarmUp(string tag, int count)
         {
-            // TODO: Delegate to ExpandPool(tag, count) or implement separately
-            //       if warm-up needs to be spread across frames.
-            throw new System.NotImplementedException();
-        }
-
-        #endregion
-
-        #region Private Helpers
-
-        /// <summary>
-        /// Instantiates a single instance of the prefab associated with
-        /// <paramref name="tag"/>, parents it under the pool's hierarchy transform,
-        /// and deactivates it so it is ready for pooling.
-        /// </summary>
-        /// <param name="tag">Pool tag whose prefab should be instantiated.</param>
-        /// <returns>The newly created, deactivated <see cref="GameObject"/>.</returns>
-        private GameObject CreatePoolObject(string tag)
-        {
-            // TODO: Look up PoolDefinition by tag.
-            // TODO: Instantiate prefab under _poolParents[tag].
-            // TODO: SetActive(false).
-            // TODO: Return the instance.
-            throw new System.NotImplementedException();
+            ExpandPool(tag, count);
         }
 
         #endregion
